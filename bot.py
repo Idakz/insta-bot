@@ -2,7 +2,7 @@ import os
 import re
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 import yt_dlp
 
 # ── Logging: prints activity to console so you can monitor what's happening ──
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN environment variable is not set!")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
