@@ -1,42 +1,63 @@
 import os
 import re
+import asyncio
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 import yt_dlp
 
-# ── Logging: prints activity to console so you can monitor what's happening ──
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ── Grab the bot token from environment variable (you'll set this on Render) ──
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+PORT = int(os.environ.get("PORT", 8080))
 
-# ── Detect if the message contains an Instagram URL ──
+# ── Tiny web server to keep Render happy ──
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    def log_message(self, format, *args):
+        pass  # silence web server logs
+
+def run_web_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
+
 def is_instagram_url(text):
     pattern = r'(https?://)?(www\.)?instagram\.com/\S+'
     return bool(re.search(pattern, text))
 
-# ── /start command: greets the user ──
+def get_user_info(update: Update):
+    user = update.message.from_user
+    username = f"@{user.username}" if user.username else "no username"
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return f"User: {username} (ID: {user.id}) | Name: {name}"
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_info = get_user_info(update)
+    logger.info(f"New user started bot — {user_info}")
     await update.message.reply_text(
         "👋 Hello! Send me any Instagram video URL and I'll download it for you.\n\n"
         "Supports: Reels, Posts, Stories (public only)"
     )
 
-# ── Main handler: receives a message, checks for IG URL, downloads & sends ──
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    user_info = get_user_info(update)
 
     if not is_instagram_url(text):
         await update.message.reply_text("⚠️ Please send a valid Instagram URL.")
         return
 
     await update.message.reply_text("⏳ Downloading... please wait.")
-    logger.info(f"Download request: {text}")
+    logger.info(f"Download request — {user_info} | URL: {text}")
 
     output_path = f"tmp_{update.message.message_id}.mp4"
 
@@ -51,10 +72,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([text])
 
-        # Check file size — Telegram bots have a 50MB limit
         file_size = os.path.getsize(output_path)
         if file_size > 50 * 1024 * 1024:
-            await update.message.reply_text("❌ Video is too large (over 50MB). Telegram doesn't allow bigger files via bots.")
+            await update.message.reply_text("❌ Video is too large (over 50MB).")
             os.remove(output_path)
             return
 
@@ -64,10 +84,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="✅ Here's your video!",
                 supports_streaming=True
             )
-        logger.info("Video sent successfully.")
+        logger.info(f"Video sent successfully — {user_info}")
 
     except yt_dlp.utils.DownloadError as e:
-        logger.error(f"Download error: {e}")
+        logger.error(f"Download error for {user_info}: {e}")
         await update.message.reply_text(
             "❌ Couldn't download this video. Possible reasons:\n"
             "• The account is private\n"
@@ -77,22 +97,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error for {user_info}: {e}")
         await update.message.reply_text("❌ Something went wrong. Please try again.")
 
     finally:
-        # Always clean up the temp file whether it worked or not
         if os.path.exists(output_path):
             os.remove(output_path)
 
-# ── Build and start the bot ──
-if __name__ == '__main__':
+async def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN environment variable is not set!")
+
+    # Start web server in background thread
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    logger.info(f"Web server started on port {PORT}")
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot is running...")
-    app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
+
+if __name__ == '__main__':
+    asyncio.run(main())
