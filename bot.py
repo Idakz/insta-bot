@@ -15,16 +15,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-PORT = int(os.environ.get("PORT", 8080))
+PORT = int(os.environ.get("PORT", 10000))
 
-# ── Tiny web server to keep Render happy ──
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
         self.end_headers()
-        self.wfile.write(b"Bot is running!")
+        self.wfile.write(b"OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain')
+        self.end_headers()
     def log_message(self, format, *args):
-        pass  # silence web server logs
+        pass
 
 def run_web_server():
     server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
@@ -108,7 +112,6 @@ async def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN environment variable is not set!")
 
-    # Start web server in background thread
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     logger.info(f"Web server started on port {PORT}")
